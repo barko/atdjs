@@ -50,7 +50,7 @@ and wr_type_expr name = function
   | `Sum (_, variants, _) -> [
     `Line (sp "(match %s with" name);
     `Inline (List.map (fun variant -> `Block (wr_variant variant)) variants);
-    `Line ");"
+    `Line ")"
   ]
 
   | `Record (_, fields, _) -> [
