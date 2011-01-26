@@ -40,9 +40,27 @@ let unpack_tuple element_prefix num_elements tuple_name =
   sp "let %s  = %s in" elements_s tuple_name
 
 (* functions to implement functions [json_of_{t}] *)
+(*
 let rec wr_module_item = function
   | `Type (_, (name, _, _), expr) -> [
     `Line (sp "let json_of_%s add_s add_c %s =" name name);
+    `Block (wr_type_expr name expr);
+  ]
+*)
+
+let let_keyword is_recursive item_num =
+  if is_recursive then
+    if item_num = 0 then
+      "let rec"
+    else
+      "and"
+  else
+    "let"
+
+let rec wr_module_item is_recursive item_num = function
+  | `Type (_, (name, _, _), expr) -> [
+    `Line (sp "%s json_of_%s add_s add_c %s =" (let_keyword is_recursive item_num) 
+             name name);
     `Block (wr_type_expr name expr);
   ]
 
@@ -58,9 +76,9 @@ and wr_type_expr name = function
     `Block (
       map_sep 
         (fun field -> `Inline (wr_field name field))
-        (fun () -> `Line "add_s \",\";") fields
+        (fun () -> `Line "; add_s \",\";") fields
     );
-    `Line "add_s \"}\""
+    `Line "; add_s \"}\""
   ]
 
   | `Tuple (_, cells, _) -> [
@@ -71,22 +89,22 @@ and wr_type_expr name = function
         fun i cell -> 
           let name = sprintf "c%d" i in
           `Inline (wr_cell name cell)
-      ) (fun _ -> `Line "add_s \",\"; ") cells
+      ) (fun _ -> `Line "; add_s \",\"; ") cells
     );
-    `Line "add_s \"]\""
+    `Line "; add_s \"]\""
   ]
 
   | `Name (_, (_, type_name, type_exprs), _) -> [
     match type_name with
-      | "bool"     -> `Line (sp "add_s (string_of_bool %s) ; " name)
-      | "int"      -> `Line (sp "add_s (string_of_int %s) ; " name)
-      | "float"    -> `Line (sp "add_s (Json_io.string_of_json_float %s) ; " name)
-      | "unit"     -> `Line (sp "add_s \"null\"; ")
+      | "bool"     -> `Line (sp "add_s (string_of_bool %s)" name)
+      | "int"      -> `Line (sp "add_s (string_of_int %s)" name)
+      | "float"    -> `Line (sp "add_s (Json_io.string_of_json_float %s)" name)
+      | "unit"     -> `Line (sp "add_s \"null\"")
       | "string"   -> `Line (
-        sp "add_s \"\\\"\"; escape add_s add_c %s; add_s \"\\\"\"; " name
+        sp "(add_s \"\\\"\"; escape add_s add_c %s; add_s \"\\\"\")" name
       )
       | "abstract" -> failwith "abstract field not supported"
-      | other -> `Line (sp "json_of_%s add_s add_c %s; " type_name name)
+      | other -> `Line (sp "json_of_%s add_s add_c %s " type_name name)
   ]
 
   | `List (_, expr, _) -> [
@@ -107,7 +125,7 @@ and wr_type_expr name = function
       `Block [
         `Line "add_s \"[\\\"Some\\\",\"; ";
         `Block (wr_type_expr "x" expr);
-        `Line "add_s \"]\"";
+        `Line "; add_s \"]\"";
       ];
       `Line "| None -> add_s \"\\\"None\\\"\"" 
     ]
@@ -129,7 +147,7 @@ and wr_variant = function
               `Line (sp "add_s \"\\\"%s\\\",\"; " name);
               `Inline (wr_type_expr "x" type_expr);
             ];
-            `Line "add_s \"]\" "
+            `Line "; add_s \"]\" "
           ];
         ]
         | None ->
@@ -175,11 +193,20 @@ let wr_js_module_item = function
   ]
 
 (* functions to render type declarations *)
-let rec ty_module_item = function
-  | `Type (_, (name, _, _), expr) -> [
-    `Line (sp "type %s =" name);
-    `Block (ty_type_expr expr)
-  ]
+let rec ty_module_item is_recursive item_num = function
+  | `Type (_, (name, _, _), expr) -> 
+    let type_keyword =
+      if is_recursive then
+        if item_num = 0 then
+          "type"
+        else
+          "and"
+      else
+        "type"
+    in [
+      `Line (sp "%s %s =" type_keyword name);
+      `Block (ty_type_expr expr)
+    ]
 
 and ty_type_expr = function
   | `Sum (_, variants, _) -> [
@@ -272,9 +299,9 @@ let rd_js_module_item = function
     ]
   ]
     
-let rec rd_module_item = function
+let rec rd_module_item is_recursive item_num = function
   | `Type (_, (name, _, _), expr) -> [
-    `Line (sp "let %s_of_json %s =" name name);
+    `Line (sp "%s %s_of_json %s =" (let_keyword is_recursive item_num) name name);
     `Block (rd_type_expr name expr);
   ]
 
@@ -424,6 +451,14 @@ let sig_module_item = function
     `Line (sp "val %s_of_string : string -> %s" name name);
   ]
 
+let bodies_of_module modu = 
+  List.flatten (
+    List.rev (
+      List.fold_left (
+        fun accu (_, body) ->  body :: accu
+      ) [] modu
+    ) 
+  )
 
 let make_ocaml_files ~opens atd_file prefix =
   let head, m0 = Atd_util.load_file 
@@ -432,15 +467,9 @@ let make_ocaml_files ~opens atd_file prefix =
     ~inherit_variants:true
     atd_file
   in
-  let m2 = Atd_util.tsort (Atd_expand.expand_module_body ~keep_poly:true m0) in
-  let bodies = 
-    List.rev (
-      List.fold_left (
-        fun accu (_, body) ->  body :: accu
-      ) [] m2
-    ) 
-  in
-  let items2 = List.flatten bodies in
+  let un_expanded = Atd_util.tsort m0 in
+  let expanded = Atd_util.tsort (Atd_expand.expand_module_body ~keep_poly:true m0) in
+  let items_un_expanded = bodies_of_module un_expanded in
 
   let empty_line () =
     `Line ""
@@ -454,37 +483,48 @@ let make_ocaml_files ~opens atd_file prefix =
   let wr_js_ml_code = map_sep (
     fun item ->
       `Inline (wr_js_module_item item)
-  ) empty_line m0 in
+  ) empty_line items_un_expanded in
 
   let rd_js_ml_code = map_sep (
     fun item ->
       `Inline (rd_js_module_item item)
-  ) empty_line m0 in
+  ) empty_line items_un_expanded in
 
-  let wr_ml_code = map_sep (
-    fun item ->
-      `Inline (wr_module_item item)
-  ) empty_line items2 in
+  let ml_code f = 
+    map_sep (
+      fun (is_recursive, items) ->
+        `Inline (
+          List.flatten (
+            mapi (
+              fun i -> 
+                f is_recursive i
+          ) items
+        )
+      ) 
+    ) empty_line expanded
+  in
 
-  let rd_ml_code = map_sep (
-    fun item ->
-      `Inline (rd_module_item item)
-  ) empty_line items2 in    
+  let wr_ml_code = ml_code wr_module_item in
+  let rd_ml_code = ml_code rd_module_item in
 
-  let ty_ml_code = map_sep (
-    fun item ->
-      `Inline (ty_module_item item)
-  ) empty_line items2 in
+  let ty_code (is_recursive, items) =
+    `Inline (
+      List.flatten (
+        mapi (
+          fun i -> 
+            ty_module_item is_recursive i
+        ) items
+      )
+    ) 
+  in
 
-  let ty_mli_code = map_sep (
-    fun item ->
-      `Inline (ty_module_item item)
-  ) empty_line m0 in
+  let ty_ml_code = map_sep ty_code empty_line expanded in
+  let ty_mli_code = map_sep ty_code empty_line un_expanded in
 
   let sig_mli_code = map_sep (
     fun item ->
       `Inline (sig_module_item item)
-  ) empty_line m0 in
+  ) empty_line items_un_expanded in
 
   let iter_sep_function = [
     `Line "let rec iter_sep f sep = function";
