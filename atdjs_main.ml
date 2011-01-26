@@ -19,7 +19,6 @@ let main () =
   let files = ref [] in
   let opens = ref [] in
   let out_prefix = ref None in
-  (* let type_aliases = ref None in *)
 
   let set_opens s =
     let l = Str.split (Str.regexp " *, *\\| +") s in
@@ -27,15 +26,6 @@ let main () =
   in
 
   let options = [
-    (*
-    "-extend", Arg.String (fun s -> type_aliases := Some s),
-    "MODULE
-          Assume that all type definitions are provided by the specified
-          module unless otherwise annotated.  Type aliases are created
-          for each type, e.g.
-            type t = Module.t";
-    *)
-
     "-o", Arg.String (fun s ->
                         let out =
                           match s with
