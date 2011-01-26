@@ -12,8 +12,7 @@ browser-based client apps (written in OCaml and compiled with
 [ocamljs](https://github.com/jaked/ocamljs)) which send/receive typed
 messages via Javascript's XHR.  Currnently, the server-side may be
 implemented in either OCaml (using
-[atdgen](http://oss.wink.com/atdgen/)),
-[atdjs](https://github.com/barko/atdjs) or Java (using
+[atdgen](http://oss.wink.com/atdgen/)), or Java (using
 [atdj](https://github.com/MyLifeLabs/atdj)).
 
 Plain OCaml and [atd](http://oss.wink.com/atd/) are required for
