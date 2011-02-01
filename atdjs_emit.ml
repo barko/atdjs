@@ -40,14 +40,6 @@ let unpack_tuple element_prefix num_elements tuple_name =
   sp "let %s  = %s in" elements_s tuple_name
 
 (* functions to implement functions [json_of_{t}] *)
-(*
-let rec wr_module_item = function
-  | `Type (_, (name, _, _), expr) -> [
-    `Line (sp "let json_of_%s add_s add_c %s =" name name);
-    `Block (wr_type_expr name expr);
-  ]
-*)
-
 let let_keyword is_recursive item_num =
   if is_recursive then
     if item_num = 0 then
@@ -351,7 +343,7 @@ and rd_type_expr name = function
       | "unit"     -> primitive "| Null -> ()"
       | "string"   -> primitive "| String s -> s"
       | "abstract" -> failwith "abstract field not supported"
-      | other      -> [`Line (sp "%s_of_json %s" other name)]
+      | other      -> [`Line (sp "(%s_of_json %s)" other name)]
 
   )
 
