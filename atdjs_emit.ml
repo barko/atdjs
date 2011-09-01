@@ -51,6 +51,16 @@ let use_ocaml_array annot =
         use_ocaml_array
   ) false annot
 
+let err = "only support <ocaml module=\"Module\"> abstract annotations"
+let module_name_of_abstract_type_annot = function
+  | ["ocaml", ocaml_section] -> (
+      match ocaml_section with
+        | _, ["module", (_, Some module_name) ] -> module_name
+        | _ -> failwith err
+    )
+  | _ ->
+      failwith err
+
 (* functions to implement functions [json_of_{t}] *)
 let let_keyword is_recursive item_num =
   if is_recursive then
@@ -62,16 +72,16 @@ let let_keyword is_recursive item_num =
     "let"
 
 let rec wr_module_item is_recursive item_num = function
-  | `Type (_, (name, _, _), expr) -> [
+  | `Type (_, (name, _, annot ), expr) -> [
     `Line (sp "%s json_of_%s add_s add_c %s =" (let_keyword is_recursive item_num) 
              name name);
-    `Block (wr_type_expr name expr);
+    `Block (wr_type_expr name annot expr);
   ]
 
-and wr_type_expr name = function
+and wr_type_expr name ty_annot = function
   | `Sum (_, variants, _) -> [
     `Line (sp "(match %s with" name);
-    `Inline (List.map (fun variant -> `Block (wr_variant variant)) variants);
+    `Inline (List.map (fun variant -> `Block (wr_variant ty_annot variant)) variants);
     `Line ")"
   ]
 
@@ -79,7 +89,7 @@ and wr_type_expr name = function
     `Line "add_s \"{\";";
     `Block (
       map_sep 
-        (fun field -> `Inline (wr_field name field))
+        (fun field -> `Inline (wr_field name ty_annot field))
         (fun () -> `Line "; add_s \",\";") fields
     );
     `Line "; add_s \"}\""
@@ -92,13 +102,13 @@ and wr_type_expr name = function
       mapi_sep (
         fun i cell -> 
           let name = sprintf "c%d" i in
-          `Inline (wr_cell name cell)
+          `Inline (wr_cell name ty_annot cell)
       ) (fun _ -> `Line "; add_s \",\"; ") cells
     );
     `Line "; add_s \"]\""
   ]
 
-  | `Name (_, (_, type_name, type_exprs), _) -> [
+  | `Name (_, (_, type_name, type_exprs), annot ) -> [
     match type_name with
       | "bool"     -> `Line (sp "add_s (string_of_bool %s)" name)
       | "int"      -> `Line (sp "add_s (string_of_int %s)" name)
@@ -107,7 +117,9 @@ and wr_type_expr name = function
       | "string"   -> `Line (
         sp "(add_s \"\\\"\"; escape add_s add_c %s; add_s \"\\\"\")" name
       )
-      | "abstract" -> failwith "abstract field not supported"
+      | "abstract" -> 
+          let module_name = module_name_of_abstract_type_annot ty_annot in
+          `Line (sp "add_s (%s.string_of_%s %s)" module_name name name)
       | other -> `Line (sp "json_of_%s add_s add_c %s " type_name name)
   ]
 
@@ -123,7 +135,7 @@ and wr_type_expr name = function
       `Line (iterator ^ " (");
       `Block [
         `Line "fun el -> ";
-        `Block (wr_type_expr "el" expr);
+        `Block (wr_type_expr "el" ty_annot expr);
       ];
       `Line (sp ") (fun _ -> add_s \",\") %s;" name);
       `Line "add_s \"]\""
@@ -135,7 +147,7 @@ and wr_type_expr name = function
       `Line "| Some x ->";
       `Block [
         `Line "add_s \"[\\\"Some\\\",\"; ";
-        `Block (wr_type_expr "x" expr);
+        `Block (wr_type_expr "x" ty_annot expr);
         `Line "; add_s \"]\"";
       ];
       `Line "| None -> add_s \"\\\"None\\\"\"" 
@@ -146,7 +158,7 @@ and wr_type_expr name = function
 
   | `Tvar _ -> failwith "tvar not supported"
 
-and wr_variant = function
+and wr_variant ty_annot = function
   | `Variant (_, (name,_), type_expr_opt) -> [
     `Block (
       match type_expr_opt with
@@ -156,7 +168,7 @@ and wr_variant = function
             `Line "add_s \"[\";";
             `Block [
               `Line (sp "add_s \"\\\"%s\\\",\"; " name);
-              `Inline (wr_type_expr "x" type_expr);
+              `Inline (wr_type_expr "x" ty_annot type_expr);
             ];
             `Line "; add_s \"]\" "
           ];
@@ -168,14 +180,14 @@ and wr_variant = function
 
   | `Inherit _ -> assert false
 
-and wr_field record_name = function
+and wr_field record_name ty_annot = function
   | `Field (_, (field_name, field_kind, _), type_expr) -> 
     (match field_kind with
       | `Required -> [
         `Line (sp "add_s \"\\\"%s\\\":\";" field_name);
         `Inline (
           let dot = record_name ^ "." ^ field_name in
-          wr_type_expr dot type_expr;
+          wr_type_expr dot ty_annot type_expr;
         )
       ]
 
@@ -185,8 +197,8 @@ and wr_field record_name = function
 
   | `Inherit _ -> assert false
 
-and wr_cell name (_, expr, _) = 
-  wr_type_expr name expr 
+and wr_cell name ty_annot (_, expr, _) = 
+  wr_type_expr name ty_annot expr 
 
 
 (* functions to implement functions [string_of_{t}], by calling
@@ -205,103 +217,106 @@ let wr_js_module_item = function
 
 (* functions to render type declarations *)
 let rec ty_module_item is_recursive item_num = function
-  | `Type (_, (name, _, _), expr) -> 
-    let type_keyword =
-      if is_recursive then
-        if item_num = 0 then
-          "type"
+  | `Type (_, (name, _, ty_annot), expr) -> 
+      let type_keyword =
+        if is_recursive then
+          if item_num = 0 then
+            "type"
+          else
+            "and"
         else
-          "and"
-      else
-        "type"
-    in [
-      `Line (sp "%s %s =" type_keyword name);
-      `Block (ty_type_expr expr)
+          "type"
+      in [
+        `Line (sp "%s %s =" type_keyword name);
+        `Block (ty_type_expr ty_annot name expr)
+      ]
+
+and ty_type_expr ty_annot ty_name = function
+  | `Sum (_, variants, _) -> [
+      `Line "[";
+      `Inline (
+        List.map (
+          fun variant -> 
+            `Inline (ty_variant ty_annot ty_name variant)
+        ) variants
+      );
+      `Line "]";
     ]
 
-and ty_type_expr = function
-  | `Sum (_, variants, _) -> [
-    `Line "[";
-    `Inline (
-      List.map (
-        fun variant -> 
-          `Inline (ty_variant variant)
-      ) variants
-    );
-    `Line "]";
-  ]
-
   | `Record (_, fields, _) -> [
-    `Line "{";
-    `Inline (
-      List.map (
-        function 
-          | `Field (_, (field_name, field_kind, _), type_expr) -> 
-            (match field_kind with
-              | `Required -> `Block [
-                `Line (sp "%s : " field_name);
-                `Inline (ty_type_expr type_expr);
-                `Line ";"
-              ]
+      `Line "{";
+      `Inline (
+        List.map (
+          function 
+            | `Field (_, (field_name, field_kind, _), type_expr) -> 
+                (match field_kind with
+                   | `Required -> `Block [
+                       `Line (sp "%s : " field_name);
+                       `Inline (ty_type_expr ty_annot ty_name type_expr );
+                       `Line ";"
+                     ]
 
-              | `Optional -> failwith "optional fields not supported"
-              | `With_default -> failwith "optional fields with default not supported"
-            )
+                   | `Optional -> failwith "optional fields not supported"
+                   | `With_default -> failwith "optional fields with default not supported"
+                )
 
-          | `Inherit _ -> assert false
+            | `Inherit _ -> assert false
 
-      ) fields
-    );
-    `Line "}"
-  ]
+        ) fields
+      );
+      `Line "}"
+    ]
 
-  | `Name (_, (_, type_name, type_exprs), _) -> [
-    match type_name with
-      | "abstract" -> failwith "abstract field not supported"
-      | other -> `Line (type_name)
-  ]
+  | `Name (_, (_, type_name, type_exprs), annot) -> [
+      match type_name with
+        | "abstract" -> 
+            let module_name = module_name_of_abstract_type_annot ty_annot in
+            `Line (sp "%s.%s" module_name ty_name)
+
+        | other -> `Line (type_name)
+    ]
 
   | `Tuple (_, cells, _) -> [
-    `Line "(";
-    `Block (
-      map_sep (
-        fun (_, expr, _) ->
-          `Inline (ty_type_expr expr)
-      ) (fun _ -> `Line "*") cells
-    );
-    `Line ")"
-  ]
+      `Line "(";
+      `Block (
+        map_sep (
+          fun (_, expr, _) ->
+            `Inline (ty_type_expr ty_annot ty_name expr)
+        ) (fun _ -> `Line "*") cells
+      );
+      `Line ")"
+    ]
 
   | `List (_, expr, annot) -> [
-    `Inline (ty_type_expr expr);
-    `Line (
-      if use_ocaml_array annot then
-        "array"
-      else
-        "list"
+      `Inline (ty_type_expr ty_annot ty_name expr);
+      `Line (
+        if use_ocaml_array annot then
+          "array"
+        else
+          "list"
 
-    )
+      )
 
-  ]
+    ]
 
   | `Option (_, expr, _) -> [
-    `Inline (ty_type_expr expr);
-    `Line "option"
-  ]
+      `Inline (ty_type_expr ty_annot ty_name expr);
+      `Line "option"
+    ]
 
   | `Shared _ -> failwith "shared values not supported"
   | `Tvar _ -> failwith "tvar not supported"
 
-and ty_variant = function
+and ty_variant ty_annot ty_name = function
   | `Variant (_, (name,_), type_expr_opt) -> (
-    match type_expr_opt with
-      | Some type_expr -> [
-        `Line (sp "| `%s of " name);
-        `Block (ty_type_expr type_expr)
-      ]
-      | None ->
-        [`Line (sp "| `%s" name )]
-  )
+      match type_expr_opt with
+        | Some type_expr -> [
+            `Line (sp "| `%s of " name);
+            `Block (ty_type_expr ty_annot ty_name type_expr)
+          ]
+        | None ->
+            [`Line (sp "| `%s" name )]
+    )
 
   | `Inherit _ -> assert false
 
@@ -318,15 +333,15 @@ let rd_js_module_item = function
   ]
     
 let rec rd_module_item is_recursive item_num = function
-  | `Type (_, (name, _, _), expr) -> [
+  | `Type (_, (name, _, annot), expr) -> [
     `Line (sp "%s %s_of_json %s =" (let_keyword is_recursive item_num) name name);
-    `Block (rd_type_expr name expr);
+    `Block (rd_type_expr name annot expr);
   ]
 
-and rd_type_expr name = function
+and rd_type_expr name ty_annot = function
   | `Sum (_, variants, _) -> [
     `Line (sp "(match %s with" name);
-    `Inline (List.map (fun variant -> `Block (rd_variant variant)) variants);
+    `Inline (List.map (fun variant -> `Block (rd_variant ty_annot variant)) variants);
     `Block [`Line "| _ -> raise Error"];
     `Line ")"
   ]
@@ -342,7 +357,7 @@ and rd_type_expr name = function
           mapi_sep 
             (fun i (_, expr, _) ->
               let c_name = "c" ^ (string_of_int i) in
-              `Inline (rd_type_expr c_name expr)
+              `Inline (rd_type_expr c_name ty_annot expr)
             ) 
             (fun _ -> `Line ",") cells
         );
@@ -352,7 +367,7 @@ and rd_type_expr name = function
       `Line ")"
     ]
 
-  | `Name (_, (_, type_name, type_exprs), _) -> (
+  | `Name (_, (_, type_name, type_exprs), annot) -> (
     let primitive line = [
       `Line (sp "(match %s with" name);
       `Block [
@@ -368,8 +383,12 @@ and rd_type_expr name = function
       | "float"    -> primitive "| Float f -> f"
       | "unit"     -> primitive "| Null -> ()"
       | "string"   -> primitive "| String s -> s"
-      | "abstract" -> failwith "abstract field not supported"
-      | other      -> [`Line (sp "(%s_of_json %s)" other name)]
+
+      | "abstract" -> 
+          let module_name = module_name_of_abstract_type_annot ty_annot in
+          [`Line (sp "(%s.%s_of_json %s)" module_name name name )]
+
+      | other -> [`Line (sp "(%s_of_json %s)" other name)]
 
   )
 
@@ -377,7 +396,7 @@ and rd_type_expr name = function
     `Line (sp "(match %s with" name);
     `Block [
       `Line "| Array [String \"Some\"; z ] -> Some ";
-      `Block (rd_type_expr "z" expr);
+      `Block (rd_type_expr "z" ty_annot expr);
       `Line "| String \"None\" -> None";
       `Line "| _ -> raise Error"
     ];
@@ -399,7 +418,7 @@ and rd_type_expr name = function
                   `Line (sp "%s = (" field_name);
                   `Block [
                     `Line (sp "let v = find %S in" field_name);
-                    `Inline (rd_type_expr "v" type_expr); 
+                    `Inline (rd_type_expr "v" ty_annot type_expr); 
                   ];
                   `Line ");"
                 ]
@@ -425,12 +444,12 @@ and rd_type_expr name = function
         (* TODO: kind of inefficient to [Array.of_list (List.map ...)] *)
         if use_ocaml_array annot then `Inline [
           `Line "| Array z -> Array.of_list (List.map (fun el -> ";
-          `Block (rd_type_expr "el" expr);
+          `Block (rd_type_expr "el" ty_annot expr);
           `Line ") z)";
         ]
          else `Inline [
            `Line "| Array z -> List.map (fun el -> ";
-           `Block (rd_type_expr "el" expr);
+           `Block (rd_type_expr "el" ty_annot expr);
            `Line ") z";
          ];
         `Line "| _ -> raise Error";
@@ -441,13 +460,13 @@ and rd_type_expr name = function
   | `Shared _ -> failwith "shared values not supported"
   | `Tvar _ -> failwith "tvar not supported"
 
-and rd_variant = function
+and rd_variant ty_annot = function
   | `Variant (_, (name,_), type_expr_opt) -> [
     `Inline (
       match type_expr_opt with
         | Some type_expr -> [
           `Line (sp "| Array [String %S; x] -> `%s (" name name);
-          `Block (rd_type_expr "x" type_expr);
+          `Block (rd_type_expr "x" ty_annot type_expr);
           `Line ")"
         ]
         | None -> [
@@ -475,6 +494,7 @@ let sig_module_item = function
   | `Type (_, (name, _, _), _) -> [
     `Line (sp "val string_of_%s : %s -> string" name name);
     `Line (sp "val %s_of_string : string -> %s" name name);
+    `Line (sp "val %s_of_json : Json_type.json_type -> %s" name name);
   ]
 
 let bodies_of_module modu = 
