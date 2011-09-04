@@ -13,7 +13,7 @@ browser-based client apps (written in OCaml and compiled with
 [js_of_ocaml](https://ocsigen.org/js_of_ocaml) which send/receive
 typed messages via Javascript's XHR.
 
-Plain OCaml and [atd]https://github.com/MyLifeLabs/atd/) are required
+Plain OCaml and [atd](https://github.com/MyLifeLabs/atd/) are required
 for building [atdjs](https://github.com/barko/atdjs).
 [js_of_ocaml](https://ocsigen.org/js_of_ocaml) and
 [jsonoj](https://github.com/barko/jsonoj) are required for building
