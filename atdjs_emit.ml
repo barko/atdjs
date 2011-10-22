@@ -61,6 +61,20 @@ let module_name_of_abstract_type_annot = function
   | _ ->
       failwith err
 
+let field_prefix_of_record_annot = function
+  | ["ocaml", ocaml_section] -> (
+      match ocaml_section with
+        | _, ["field_prefix", (_, Some field_prefix) ] -> Some field_prefix
+        | _, [other, _] -> 
+            printf "ignoring annotation %s\n%!" other;
+            None
+        | _ ->
+            None
+    )
+  | _ ->
+      None
+
+
 (* functions to implement functions [json_of_{t}] *)
 let let_keyword is_recursive item_num =
   if is_recursive then
@@ -73,86 +87,88 @@ let let_keyword is_recursive item_num =
 
 let rec wr_module_item is_recursive item_num = function
   | `Type (_, (name, _, annot ), expr) -> [
-    `Line (sp "%s json_of_%s add_s add_c %s =" (let_keyword is_recursive item_num) 
-             name name);
-    `Block (wr_type_expr name annot expr);
-  ]
+      `Line (sp "%s json_of_%s add_s add_c %s =" (let_keyword is_recursive item_num) 
+               name name);
+      `Block (wr_type_expr name annot expr);
+    ]
 
 and wr_type_expr name ty_annot = function
   | `Sum (_, variants, _) -> [
-    `Line (sp "(match %s with" name);
-    `Inline (List.map (fun variant -> `Block (wr_variant ty_annot variant)) variants);
-    `Line ")"
-  ]
+      `Line (sp "(match %s with" name);
+      `Inline (List.map (fun variant -> `Block (wr_variant ty_annot variant)) variants);
+      `Line ")"
+    ]
 
-  | `Record (_, fields, _) -> [
-    `Line "add_s \"{\";";
-    `Block (
-      map_sep 
-        (fun field -> `Inline (wr_field name ty_annot field))
-        (fun () -> `Line "; add_s \",\";") fields
-    );
-    `Line "; add_s \"}\""
-  ]
+  | `Record (_, fields, record_annot) -> 
+      let field_prefix_opt = field_prefix_of_record_annot record_annot in
+      [
+        `Line "add_s \"{\";";
+        `Block (
+          map_sep 
+            (fun field -> `Inline (wr_field name ty_annot field_prefix_opt field))
+            (fun () -> `Line "; add_s \",\";") fields
+        );
+        `Line "; add_s \"}\""
+      ]
 
   | `Tuple (_, cells, _) -> [
-    `Line (unpack_tuple "c" (List.length cells) name);
-    `Line "add_s \"[\"; ";
-    `Block (
-      mapi_sep (
-        fun i cell -> 
-          let name = sprintf "c%d" i in
-          `Inline (wr_cell name ty_annot cell)
-      ) (fun _ -> `Line "; add_s \",\"; ") cells
-    );
-    `Line "; add_s \"]\""
-  ]
+      `Line (unpack_tuple "c" (List.length cells) name);
+      `Line "add_s \"[\"; ";
+      `Block (
+        mapi_sep (
+          fun i cell -> 
+            let name = sprintf "c%d" i in
+            `Inline (wr_cell name ty_annot cell)
+        ) (fun _ -> `Line "; add_s \",\"; ") cells
+      );
+      `Line "; add_s \"]\""
+    ]
 
   | `Name (_, (_, type_name, type_exprs), annot ) -> [
-    match type_name with
-      | "bool"     -> `Line (sp "add_s (string_of_bool %s)" name)
-      | "int"      -> `Line (sp "add_s (string_of_int %s)" name)
-      | "float"    -> `Line (sp "add_s (Json_io.string_of_json_float %s)" name)
-      | "unit"     -> `Line (sp "add_s \"null\"")
-      | "string"   -> `Line (
-        sp "(add_s \"\\\"\"; escape add_s add_c %s; add_s \"\\\"\")" name
-      )
-      | "abstract" -> 
-          let module_name = module_name_of_abstract_type_annot ty_annot in
-          `Line (sp "add_s (%s.string_of_%s %s)" module_name name name)
-      | other -> `Line (sp "json_of_%s add_s add_c %s " type_name name)
-  ]
+      match type_name with
+        | "bool"     -> `Line (sp "add_s (string_of_bool %s)" name)
+        | "int"      -> `Line (sp "add_s (string_of_int %s)" name)
+        | "float"    -> `Line (sp "add_s (Json_io.string_of_json_float %s)" name)
+        | "unit"     -> `Line (sp "add_s \"null\"")
+        | "string"   -> `Line (
+            sp "(add_s \"\\\"\"; escape add_s add_c %s; add_s \"\\\"\")" name
+          )
+        | "abstract" -> 
+            let module_name = module_name_of_abstract_type_annot ty_annot in
+            `Line (sp "add_s (%s.string_of_%s %s)" module_name name name)
+        | other -> `Line (sp "json_of_%s add_s add_c %s " type_name name)
+    ]
 
   | `List (_, expr, annot) -> 
-    let iterator = 
-      if use_ocaml_array annot then
-        "array_iter_sep"
-      else
-        "iter_sep"
-    in
-    [
-    `Line "add_s \"[\";";
-      `Line (iterator ^ " (");
-      `Block [
-        `Line "fun el -> ";
-        `Block (wr_type_expr "el" ty_annot expr);
-      ];
-      `Line (sp ") (fun _ -> add_s \",\") %s;" name);
-      `Line "add_s \"]\""
-    ]
+      let iterator = 
+        if use_ocaml_array annot then
+          "array_iter_sep"
+        else
+          "iter_sep"
+      in
+      [
+        `Line "add_s \"[\";";
+        `Line (iterator ^ " (");
+        `Block [
+          `Line "fun el -> ";
+          `Block (wr_type_expr "el" ty_annot expr);
+        ];
+        `Line (sp ") (fun _ -> add_s \",\") %s;" name);
+        `Line "add_s \"]\""
+      ]
 
   | `Option (_, expr, _) -> [
-    `Line (sp "match %s with" name);
-    `Block [
-      `Line "| Some x ->";
+      `Line (sp "match %s with" name);
       `Block [
-        `Line "add_s \"[\\\"Some\\\",\"; ";
-        `Block (wr_type_expr "x" ty_annot expr);
-        `Line "; add_s \"]\"";
-      ];
-      `Line "| None -> add_s \"\\\"None\\\"\"" 
+        `Line "| Some x ->";
+        `Block [
+          `Line "add_s \"[\\\"Some\\\",\"; ";
+          `Block (wr_type_expr "x" ty_annot expr);
+          `Line "; add_s \"]\"";
+        ];
+        `Line "| None -> add_s \"\\\"None\\\"\"" 
+      ]
     ]
-  ]
 
   | `Shared _ -> failwith "shared values not supported"
 
@@ -160,40 +176,45 @@ and wr_type_expr name ty_annot = function
 
 and wr_variant ty_annot = function
   | `Variant (_, (name,_), type_expr_opt) -> [
-    `Block (
-      match type_expr_opt with
-        | Some type_expr -> [
-          `Line (sp "| `%s x ->" name);
-          `Block [
-            `Line "add_s \"[\";";
-            `Block [
-              `Line (sp "add_s \"\\\"%s\\\",\"; " name);
-              `Inline (wr_type_expr "x" ty_annot type_expr);
-            ];
-            `Line "; add_s \"]\" "
-          ];
-        ]
-        | None ->
-          [ `Line (sp "| `%s -> add_s \"\\\"%s\\\"\" " name name) ]
-    )
-  ]
+      `Block (
+        match type_expr_opt with
+          | Some type_expr -> [
+              `Line (sp "| `%s x ->" name);
+              `Block [
+                `Line "add_s \"[\";";
+                `Block [
+                  `Line (sp "add_s \"\\\"%s\\\",\"; " name);
+                  `Inline (wr_type_expr "x" ty_annot type_expr);
+                ];
+                `Line "; add_s \"]\" "
+              ];
+            ]
+          | None ->
+              [ `Line (sp "| `%s -> add_s \"\\\"%s\\\"\" " name name) ]
+      )
+    ]
 
   | `Inherit _ -> assert false
 
-and wr_field record_name ty_annot = function
+and wr_field record_name ty_annot field_prefix_opt = function
   | `Field (_, (field_name, field_kind, _), type_expr) -> 
-    (match field_kind with
-      | `Required -> [
-        `Line (sp "add_s \"\\\"%s\\\":\";" field_name);
-        `Inline (
-          let dot = record_name ^ "." ^ field_name in
-          wr_type_expr dot ty_annot type_expr;
-        )
-      ]
+      (match field_kind with
+         | `Required -> [
+             `Line (sp "add_s \"\\\"%s\\\":\";" field_name);
+             `Inline (
+               let field_prefix =
+                 match field_prefix_opt with
+                   | Some field_prefix -> field_prefix
+                   | None -> ""
+               in
+               let dot = record_name ^ "." ^ field_prefix ^ field_name in
+               wr_type_expr dot ty_annot type_expr;
+             )
+           ]
 
-      | `Optional -> failwith "optional fields not supported"
-      | `With_default -> failwith "optional fields with default not supported"
-    )
+         | `Optional -> failwith "optional fields not supported"
+         | `With_default -> failwith "optional fields with default not supported"
+      )
 
   | `Inherit _ -> assert false
 
@@ -243,15 +264,21 @@ and ty_type_expr ty_annot ty_name = function
       `Line "]";
     ]
 
-  | `Record (_, fields, _) -> [
+  | `Record (_, fields, record_annot ) -> [
       `Line "{";
       `Inline (
         List.map (
           function 
             | `Field (_, (field_name, field_kind, _), type_expr) -> 
+                let field_prefix =
+                  match field_prefix_of_record_annot record_annot with
+                    | Some field_prefix -> field_prefix
+                    | None -> ""
+                in
+
                 (match field_kind with
                    | `Required -> `Block [
-                       `Line (sp "%s : " field_name);
+                       `Line (sp "%s%s : " field_prefix field_name);
                        `Inline (ty_type_expr ty_annot ty_name type_expr );
                        `Line ";"
                      ]
@@ -334,147 +361,154 @@ let rd_js_module_item = function
     
 let rec rd_module_item is_recursive item_num = function
   | `Type (_, (name, _, annot), expr) -> [
-    `Line (sp "%s %s_of_json %s =" (let_keyword is_recursive item_num) name name);
-    `Block (rd_type_expr name annot expr);
-  ]
+      `Line (sp "%s %s_of_json %s =" (let_keyword is_recursive item_num) name name);
+      `Block (rd_type_expr name annot expr);
+    ]
 
 and rd_type_expr name ty_annot = function
   | `Sum (_, variants, _) -> [
-    `Line (sp "(match %s with" name);
-    `Inline (List.map (fun variant -> `Block (rd_variant ty_annot variant)) variants);
-    `Block [`Line "| _ -> raise Error"];
-    `Line ")"
-  ]
-    
+      `Line (sp "(match %s with" name);
+      `Inline (List.map (fun variant -> `Block (rd_variant ty_annot variant)) variants);
+      `Block [`Line "| _ -> raise Error"];
+      `Line ")"
+    ]
+      
   | `Tuple (_, cells, _) -> 
-    let list_unpack = mapi (fun i _ -> "c" ^ (string_of_int i)) cells in
-    let list_unpack_s = String.concat "; " list_unpack in
-    [
+      let list_unpack = mapi (fun i _ -> "c" ^ (string_of_int i)) cells in
+      let list_unpack_s = String.concat "; " list_unpack in
+      [
+        `Line (sp "(match %s with" name);
+        `Block [
+          `Line (sp "| Array [ %s ] -> (" list_unpack_s);
+          `Block (
+            mapi_sep 
+              (fun i (_, expr, _) ->
+                 let c_name = "c" ^ (string_of_int i) in
+                 `Inline (rd_type_expr c_name ty_annot expr)
+              ) 
+              (fun _ -> `Line ",") cells
+          );
+          `Line ")";
+          `Line "| _ -> raise Error";
+        ];
+        `Line ")"
+      ]
+
+  | `Name (_, (_, type_name, type_exprs), annot) -> (
+      let primitive line = [
+        `Line (sp "(match %s with" name);
+        `Block [
+          `Line line;
+          `Line "| _ -> raise Error"
+        ];
+        `Line ")"      
+      ] in
+      
+      match type_name with
+        | "bool"     -> primitive "| Bool b -> b"
+        | "int"      -> primitive "| Int i -> i"
+        | "float"    -> primitive "| Float f -> f"
+        | "unit"     -> primitive "| Null -> ()"
+        | "string"   -> primitive "| String s -> s"
+
+        | "abstract" -> 
+            let module_name = module_name_of_abstract_type_annot ty_annot in
+            [`Line (sp "(%s.%s_of_json %s)" module_name name name )]
+
+        | other -> [`Line (sp "(%s_of_json %s)" other name)]
+
+    )
+
+  | `Option (_, expr, _) -> [
       `Line (sp "(match %s with" name);
       `Block [
-        `Line (sp "| Array [ %s ] -> (" list_unpack_s);
-        `Block (
-          mapi_sep 
-            (fun i (_, expr, _) ->
-              let c_name = "c" ^ (string_of_int i) in
-              `Inline (rd_type_expr c_name ty_annot expr)
-            ) 
-            (fun _ -> `Line ",") cells
-        );
-        `Line ")";
+        `Line "| Array [String \"Some\"; z ] -> Some ";
+        `Block (rd_type_expr "z" ty_annot expr);
+        `Line "| String \"None\" -> None";
+        `Line "| _ -> raise Error"
+      ];
+      `Line ")"
+    ]
+
+  | `Record (_, fields, record_annot) -> [
+      `Line (sp "(match %s with" name);
+      `Block [
+        `Line "| Object kv_list -> ";
+        `Block [
+          `Line "let find k = try List.assoc k kv_list with Not_found -> raise Error in";
+          `Line "{";
+          `Block (
+            List.map (
+              function 
+                | `Field (_, (field_name, field_kind, _), type_expr) -> 
+                    let field_prefix = 
+                      match field_prefix_of_record_annot record_annot with
+                        | Some field_prefix -> field_prefix
+                        | None -> ""
+                    in
+                    (match field_kind with
+                       | `Required -> `Inline [
+                           `Line (sp "%s%s = (" field_prefix field_name);
+                           `Block [
+                             `Line (sp "let v = find %S in" field_name);
+                             `Inline (rd_type_expr "v" ty_annot type_expr); 
+                           ];
+                           `Line ");"
+                         ]
+
+                       | `Optional -> failwith "optional fields not supported"
+                       | `With_default -> 
+                           failwith "optional fields with default not supported"
+                    )
+
+                | `Inherit _ -> assert false
+
+            ) fields);
+          `Line "}";
+        ];
         `Line "| _ -> raise Error";
       ];
       `Line ")"
     ]
 
-  | `Name (_, (_, type_name, type_exprs), annot) -> (
-    let primitive line = [
-      `Line (sp "(match %s with" name);
-      `Block [
-        `Line line;
-        `Line "| _ -> raise Error"
-      ];
-      `Line ")"      
-    ] in
-    
-    match type_name with
-      | "bool"     -> primitive "| Bool b -> b"
-      | "int"      -> primitive "| Int i -> i"
-      | "float"    -> primitive "| Float f -> f"
-      | "unit"     -> primitive "| Null -> ()"
-      | "string"   -> primitive "| String s -> s"
-
-      | "abstract" -> 
-          let module_name = module_name_of_abstract_type_annot ty_annot in
-          [`Line (sp "(%s.%s_of_json %s)" module_name name name )]
-
-      | other -> [`Line (sp "(%s_of_json %s)" other name)]
-
-  )
-
-  | `Option (_, expr, _) -> [
-    `Line (sp "(match %s with" name);
-    `Block [
-      `Line "| Array [String \"Some\"; z ] -> Some ";
-      `Block (rd_type_expr "z" ty_annot expr);
-      `Line "| String \"None\" -> None";
-      `Line "| _ -> raise Error"
-    ];
-    `Line ")"
-  ]
-
-  | `Record (_, fields, _) -> [
-    `Line (sp "(match %s with" name);
-    `Block [
-      `Line "| Object kv_list -> ";
-      `Block [
-        `Line "let find k = try List.assoc k kv_list with Not_found -> raise Error in";
-        `Line "{";
-        `Block (List.map (
-          function 
-            | `Field (_, (field_name, field_kind, _), type_expr) -> 
-              (match field_kind with
-                | `Required -> `Inline [
-                  `Line (sp "%s = (" field_name);
-                  `Block [
-                    `Line (sp "let v = find %S in" field_name);
-                    `Inline (rd_type_expr "v" ty_annot type_expr); 
-                  ];
-                  `Line ");"
-                ]
-
-                | `Optional -> failwith "optional fields not supported"
-                | `With_default -> failwith "optional fields with default not supported"
-              )
-
-            | `Inherit _ -> assert false
-
-        ) fields);
-        `Line "}";
-      ];
-      `Line "| _ -> raise Error";
-    ];
-    `Line ")"
-  ]
-
   | `List (_, expr, annot) ->
-    [
-      `Line (sp "(match %s with" name);
-      `Block [
-        (* TODO: kind of inefficient to [Array.of_list (List.map ...)] *)
-        if use_ocaml_array annot then `Inline [
-          `Line "| Array z -> Array.of_list (List.map (fun el -> ";
-          `Block (rd_type_expr "el" ty_annot expr);
-          `Line ") z)";
-        ]
-         else `Inline [
-           `Line "| Array z -> List.map (fun el -> ";
-           `Block (rd_type_expr "el" ty_annot expr);
-           `Line ") z";
-         ];
-        `Line "| _ -> raise Error";
+      [
+        `Line (sp "(match %s with" name);
+        `Block [
+          (* TODO: kind of inefficient to [Array.of_list (List.map ...)] *)
+          if use_ocaml_array annot then `Inline [
+            `Line "| Array z -> Array.of_list (List.map (fun el -> ";
+            `Block (rd_type_expr "el" ty_annot expr);
+            `Line ") z)";
+          ]
+          else `Inline [
+            `Line "| Array z -> List.map (fun el -> ";
+            `Block (rd_type_expr "el" ty_annot expr);
+            `Line ") z";
+          ];
+          `Line "| _ -> raise Error";
+        ];
+        `Line ")"
       ];
-      `Line ")"
-    ];
-    
+      
   | `Shared _ -> failwith "shared values not supported"
   | `Tvar _ -> failwith "tvar not supported"
 
 and rd_variant ty_annot = function
   | `Variant (_, (name,_), type_expr_opt) -> [
-    `Inline (
-      match type_expr_opt with
-        | Some type_expr -> [
-          `Line (sp "| Array [String %S; x] -> `%s (" name name);
-          `Block (rd_type_expr "x" ty_annot type_expr);
-          `Line ")"
-        ]
-        | None -> [
-          `Line (sp "| String %S -> `%s" name name)
-        ]
-    );
+      `Inline (
+        match type_expr_opt with
+          | Some type_expr -> [
+              `Line (sp "| Array [String %S; x] -> `%s (" name name);
+              `Block (rd_type_expr "x" ty_annot type_expr);
+              `Line ")"
+            ]
+          | None -> [
+              `Line (sp "| String %S -> `%s" name name)
+            ]
+      );
 
-  ]
+    ]
 
   | `Inherit _ -> assert false
 
