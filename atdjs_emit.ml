@@ -39,7 +39,7 @@ let unpack_tuple element_prefix num_elements tuple_name =
   let elements_s = String.concat ", " elements in
   sp "let %s  = %s in" elements_s tuple_name
 
-let use_ocaml_array annot = 
+let use_ocaml_array annot =
   List.fold_left (
     fun use_ocaml_array (section_name, (_, fields)) ->
       if section_name = "ocaml" then
@@ -61,17 +61,17 @@ let module_name_of_abstract_type_annot = function
   | _ ->
       failwith err
 
-let field_prefix_of_record_annot = function
-  | ["ocaml", ocaml_section] -> (
+let field_prefix_of_record_annots annots =
+    try
+      let ocaml_section = List.assoc "ocaml" annots in
       match ocaml_section with
         | _, ["field_prefix", (_, Some field_prefix) ] -> Some field_prefix
-        | _, [other, _] -> 
+        | _, [other, _] ->
             printf "ignoring annotation %s\n%!" other;
             None
         | _ ->
             None
-    )
-  | _ ->
+    with Not_found ->
       None
 
 
@@ -87,7 +87,7 @@ let let_keyword is_recursive item_num =
 
 let rec wr_module_item is_recursive item_num = function
   | `Type (_, (name, _, annot ), expr) -> [
-      `Line (sp "%s json_of_%s add_s add_c %s =" (let_keyword is_recursive item_num) 
+      `Line (sp "%s json_of_%s add_s add_c %s =" (let_keyword is_recursive item_num)
                name name);
       `Block (wr_type_expr name annot expr);
     ]
@@ -99,12 +99,12 @@ and wr_type_expr name ty_annot = function
       `Line ")"
     ]
 
-  | `Record (_, fields, record_annot) -> 
-      let field_prefix_opt = field_prefix_of_record_annot record_annot in
+  | `Record (_, fields, record_annots) ->
+      let field_prefix_opt = field_prefix_of_record_annots record_annots in
       [
         `Line "add_s \"{\";";
         `Block (
-          map_sep 
+          map_sep
             (fun field -> `Inline (wr_field name ty_annot field_prefix_opt field))
             (fun () -> `Line "; add_s \",\";") fields
         );
@@ -116,7 +116,7 @@ and wr_type_expr name ty_annot = function
       `Line "add_s \"[\"; ";
       `Block (
         mapi_sep (
-          fun i cell -> 
+          fun i cell ->
             let name = sprintf "c%d" i in
             `Inline (wr_cell name ty_annot cell)
         ) (fun _ -> `Line "; add_s \",\"; ") cells
@@ -133,14 +133,14 @@ and wr_type_expr name ty_annot = function
         | "string"   -> `Line (
             sp "(add_s \"\\\"\"; escape add_s add_c %s; add_s \"\\\"\")" name
           )
-        | "abstract" -> 
+        | "abstract" ->
             let module_name = module_name_of_abstract_type_annot ty_annot in
             `Line (sp "add_s (%s.string_of_%s %s)" module_name name name)
         | other -> `Line (sp "json_of_%s add_s add_c %s " type_name name)
     ]
 
-  | `List (_, expr, annot) -> 
-      let iterator = 
+  | `List (_, expr, annot) ->
+      let iterator =
         if use_ocaml_array annot then
           "array_iter_sep"
         else
@@ -166,12 +166,13 @@ and wr_type_expr name ty_annot = function
           `Block (wr_type_expr "x" ty_annot expr);
           `Line "; add_s \"]\"";
         ];
-        `Line "| None -> add_s \"\\\"None\\\"\"" 
+        `Line "| None -> add_s \"\\\"None\\\"\""
       ]
     ]
 
+  | `Wrap _ -> failwith "wrap values not supported"
+  | `Nullable _ -> failwith "nullable values not supported"
   | `Shared _ -> failwith "shared values not supported"
-
   | `Tvar _ -> failwith "tvar not supported"
 
 and wr_variant ty_annot = function
@@ -197,7 +198,7 @@ and wr_variant ty_annot = function
   | `Inherit _ -> assert false
 
 and wr_field record_name ty_annot field_prefix_opt = function
-  | `Field (_, (field_name, field_kind, _), type_expr) -> 
+  | `Field (_, (field_name, field_kind, _), type_expr) ->
       (match field_kind with
          | `Required -> [
              `Line (sp "add_s \"\\\"%s\\\":\";" field_name);
@@ -218,8 +219,8 @@ and wr_field record_name ty_annot field_prefix_opt = function
 
   | `Inherit _ -> assert false
 
-and wr_cell name ty_annot (_, expr, _) = 
-  wr_type_expr name ty_annot expr 
+and wr_cell name ty_annot (_, expr, _) =
+  wr_type_expr name ty_annot expr
 
 
 (* functions to implement functions [string_of_{t}], by calling
@@ -238,7 +239,7 @@ let wr_js_module_item = function
 
 (* functions to render type declarations *)
 let rec ty_module_item is_recursive item_num = function
-  | `Type (_, (name, _, ty_annot), expr) -> 
+  | `Type (_, (name, _, ty_annot), expr) ->
       let type_keyword =
         if is_recursive then
           if item_num = 0 then
@@ -257,21 +258,21 @@ and ty_type_expr ty_annot ty_name = function
       `Line "[";
       `Inline (
         List.map (
-          fun variant -> 
+          fun variant ->
             `Inline (ty_variant ty_annot ty_name variant)
         ) variants
       );
       `Line "]";
     ]
 
-  | `Record (_, fields, record_annot ) -> [
+  | `Record (_, fields, record_annots ) -> [
       `Line "{";
       `Inline (
         List.map (
-          function 
-            | `Field (_, (field_name, field_kind, _), type_expr) -> 
+          function
+            | `Field (_, (field_name, field_kind, _), type_expr) ->
                 let field_prefix =
-                  match field_prefix_of_record_annot record_annot with
+                  match field_prefix_of_record_annots record_annots with
                     | Some field_prefix -> field_prefix
                     | None -> ""
                 in
@@ -296,7 +297,7 @@ and ty_type_expr ty_annot ty_name = function
 
   | `Name (_, (_, type_name, type_exprs), annot) -> [
       match type_name with
-        | "abstract" -> 
+        | "abstract" ->
             let module_name = module_name_of_abstract_type_annot ty_annot in
             `Line (sp "%s.%s" module_name ty_name)
 
@@ -331,6 +332,8 @@ and ty_type_expr ty_annot ty_name = function
       `Line "option"
     ]
 
+  | `Wrap _ -> failwith "wrap values not supported"
+  | `Nullable _ -> failwith "nullable not supported"
   | `Shared _ -> failwith "shared values not supported"
   | `Tvar _ -> failwith "tvar not supported"
 
@@ -358,7 +361,7 @@ let rd_js_module_item = function
       `Line (sp "%s_of_json j" name);
     ]
   ]
-    
+
 let rec rd_module_item is_recursive item_num = function
   | `Type (_, (name, _, annot), expr) -> [
       `Line (sp "%s %s_of_json %s =" (let_keyword is_recursive item_num) name name);
@@ -372,8 +375,8 @@ and rd_type_expr name ty_annot = function
       `Block [`Line "| _ -> raise Error"];
       `Line ")"
     ]
-      
-  | `Tuple (_, cells, _) -> 
+
+  | `Tuple (_, cells, _) ->
       let list_unpack = mapi (fun i _ -> "c" ^ (string_of_int i)) cells in
       let list_unpack_s = String.concat "; " list_unpack in
       [
@@ -381,11 +384,11 @@ and rd_type_expr name ty_annot = function
         `Block [
           `Line (sp "| Array [ %s ] -> (" list_unpack_s);
           `Block (
-            mapi_sep 
+            mapi_sep
               (fun i (_, expr, _) ->
                  let c_name = "c" ^ (string_of_int i) in
                  `Inline (rd_type_expr c_name ty_annot expr)
-              ) 
+              )
               (fun _ -> `Line ",") cells
           );
           `Line ")";
@@ -401,9 +404,9 @@ and rd_type_expr name ty_annot = function
           `Line line;
           `Line "| _ -> raise Error"
         ];
-        `Line ")"      
+        `Line ")"
       ] in
-      
+
       match type_name with
         | "bool"     -> primitive "| Bool b -> b"
         | "int"      -> primitive "| Int i -> i"
@@ -411,7 +414,7 @@ and rd_type_expr name ty_annot = function
         | "unit"     -> primitive "| Null -> ()"
         | "string"   -> primitive "| String s -> s"
 
-        | "abstract" -> 
+        | "abstract" ->
             let module_name = module_name_of_abstract_type_annot ty_annot in
             [`Line (sp "(%s.%s_of_json %s)" module_name name name )]
 
@@ -430,7 +433,7 @@ and rd_type_expr name ty_annot = function
       `Line ")"
     ]
 
-  | `Record (_, fields, record_annot) -> [
+  | `Record (_, fields, record_annots) -> [
       `Line (sp "(match %s with" name);
       `Block [
         `Line "| Object kv_list -> ";
@@ -439,10 +442,10 @@ and rd_type_expr name ty_annot = function
           `Line "{";
           `Block (
             List.map (
-              function 
-                | `Field (_, (field_name, field_kind, _), type_expr) -> 
-                    let field_prefix = 
-                      match field_prefix_of_record_annot record_annot with
+              function
+                | `Field (_, (field_name, field_kind, _), type_expr) ->
+                    let field_prefix =
+                      match field_prefix_of_record_annots record_annots with
                         | Some field_prefix -> field_prefix
                         | None -> ""
                     in
@@ -451,13 +454,13 @@ and rd_type_expr name ty_annot = function
                            `Line (sp "%s%s = (" field_prefix field_name);
                            `Block [
                              `Line (sp "let v = find %S in" field_name);
-                             `Inline (rd_type_expr "v" ty_annot type_expr); 
+                             `Inline (rd_type_expr "v" ty_annot type_expr);
                            ];
                            `Line ");"
                          ]
 
                        | `Optional -> failwith "optional fields not supported"
-                       | `With_default -> 
+                       | `With_default ->
                            failwith "optional fields with default not supported"
                     )
 
@@ -490,7 +493,9 @@ and rd_type_expr name ty_annot = function
         ];
         `Line ")"
       ];
-      
+
+  | `Wrap _ -> failwith "wrap values not supported"
+  | `Nullable _ -> failwith "nullable not supported"
   | `Shared _ -> failwith "shared values not supported"
   | `Tvar _ -> failwith "tvar not supported"
 
@@ -531,19 +536,19 @@ let sig_module_item = function
     `Line (sp "val %s_of_json : Json_type.json_type -> %s" name name);
   ]
 
-let bodies_of_module modu = 
+let bodies_of_module modu =
   List.flatten (
     List.rev (
       List.fold_left (
         fun accu (_, body) ->  body :: accu
       ) [] modu
-    ) 
+    )
   )
 
 let make_ocaml_files ~opens atd_file prefix =
-  let head, m0 = Atd_util.load_file 
-    ~expand:false 
-    ~inherit_fields:true 
+  let head, m0 = Atd_util.load_file
+    ~expand:false
+    ~inherit_fields:true
     ~inherit_variants:true
     atd_file
   in
@@ -556,7 +561,7 @@ let make_ocaml_files ~opens atd_file prefix =
   in
 
   let opens_code = map_sep (
-    fun module_name -> 
+    fun module_name ->
       `Line (sp "open %s" module_name);
   ) empty_line opens in
 
@@ -570,17 +575,17 @@ let make_ocaml_files ~opens atd_file prefix =
       `Inline (rd_js_module_item item)
   ) empty_line items_un_expanded in
 
-  let ml_code f = 
+  let ml_code f =
     map_sep (
       fun (is_recursive, items) ->
         `Inline (
           List.flatten (
             mapi (
-              fun i -> 
+              fun i ->
                 f is_recursive i
           ) items
         )
-      ) 
+      )
     ) empty_line expanded
   in
 
@@ -591,11 +596,11 @@ let make_ocaml_files ~opens atd_file prefix =
     `Inline (
       List.flatten (
         mapi (
-          fun i -> 
+          fun i ->
             ty_module_item is_recursive i
         ) items
       )
-    ) 
+    )
   in
 
   let ty_ml_code = map_sep ty_code empty_line expanded in
@@ -644,7 +649,7 @@ let make_ocaml_files ~opens atd_file prefix =
   ] in
 
   let map_sep_id_empty_line = map_sep (fun x -> x) empty_line in
-  let ml_code = map_sep_id_empty_line [ 
+  let ml_code = map_sep_id_empty_line [
     `Line "(* auto-generated by atdjs *)";
     `Line "let escape = Json_io.escape_json_string";
 
@@ -655,8 +660,8 @@ let make_ocaml_files ~opens atd_file prefix =
     `Inline array_iter_sep_function;
 
     `Inline ty_ml_code;
-    `Inline wr_ml_code; 
-    `Inline rd_ml_code; 
+    `Inline wr_ml_code;
+    `Inline rd_ml_code;
     `Inline wr_js_ml_code;
     `Inline rd_js_ml_code;
   ] in
@@ -668,7 +673,7 @@ let make_ocaml_files ~opens atd_file prefix =
     `Inline sig_mli_code;
   ] in
 
-  let ml_ch, mli_ch = 
+  let ml_ch, mli_ch =
     match prefix with
       | `Stdout -> stdout, stdout
       | `Files path -> open_out (path ^ ".ml"), open_out (path ^ ".mli")
@@ -678,10 +683,10 @@ let make_ocaml_files ~opens atd_file prefix =
   Atd_indent.to_channel mli_ch mli_code;
   close_out ml_ch;
   close_out mli_ch
-  
 
 
 
-    
+
+
 
 
